@@ -16,6 +16,7 @@ TODO:
 */
 
 #include <Matrix.h>
+#include <math.h>
 
 class Limb {
 private:
@@ -23,7 +24,7 @@ private:
   // Variables
   const Matrix DHTable;
   const int DoF;
-  float stepSize; // Stride length
+  float stepSize = 60; // Stride length
   float direction; // Direction of travel (rads)
   const std::array<float, 3> L; // Link lengths
   const std::array<float, 3> R; // Limb joints at rest
@@ -136,6 +137,12 @@ public:
     DHTable.print();
   }
 
+  // Plots the trajectory of the next step
+  Matrix step(float angularDir) {
+    direction = angularDir;
+
+  }
+
   void runPrivateFunctionsTestbench(){
     // Single HT Matrix Test
     Serial.println("");
@@ -169,3 +176,126 @@ public:
 
   // Destructor
 };
+
+#ifndef PlotPath_H
+#define PlotPath_H
+
+//Class for making neccesary Trajectory Paths for the Foot
+class PlotPath {
+  private:
+  //Parameters for generating the trajectory
+  Matrix footPos; //Starting foot position
+  float theta; //Angular direction (in radians)
+  float stepSize;
+  Matrix stepData; //Path data for a footstep
+  Matrix startData; //Path for moving from rest to start of step trajectory
+
+  //Creates coordinates describing a footstep trajectory
+  void generateStep() {
+    Matrix point(3, 1);
+    int sampleCnt = stepSize*1.6; //Calculate sample count. Ensures the amount of samples along the path is appropriate for the size of the step
+    float t = 0.0; //What percentage we have traveled down the Guidelines for the Bezier Curve
+
+    //Bezier Curve 1
+    for (int i = 0; i <= sampleCnt/2; i++){
+      float x = (1-t)*((1-t)*(-stepSize) + (0)*t) + t*((1-t)*(0) + (stepSize)*t); //Calculates the x-component of the Curve
+      float z = (1-t)*((1-t)*(0) + (stepSize)*t) + t*((1-t)*(stepSize) + (0)*t); //Calculates the z-component of the Curve
+
+      if(i == 0){
+        //Add starting point to the path
+        stepData(0, 0) = footPos(0, 0) + x*cos(theta);
+        stepData(1, 0) = footPos(1, 0) + x*sin(theta);
+        stepData(2, 0) = footPos(2, 0) + z;
+      }else{
+        //Calculate next point on the curve
+        point(0, 0) = footPos(0, 0) + x*cos(theta);
+        point(1, 0) = footPos(1, 0) + x*sin(theta);
+        point(2, 0) = footPos(2, 0) + z;
+
+        //Compile point into path
+        stepData.joinHorizontal(point);
+      }
+
+      t+= 1.0/(sampleCnt/2.0); //Increase t
+    }
+
+    t = 0.0; //Reset t
+    //Bezier Curve 2
+    for (int i = sampleCnt/2 + 1; i <= sampleCnt; i++){
+      float x = (1-t)*((1-t)*(-stepSize) + (0)*t) + t*((1-t)*(0) + (stepSize)*t); //Calculates the x-component of the Curve
+      float z = (1-t)*((1-t)*(0) + (stepSize/3)*t) + t*((1-t)*(stepSize/3) + (0)*t); //Calculates the z-component of the Curve
+
+      //Calculate next point on the curve
+      point(0, 0) = footPos(0, 0) + x*cos(theta);
+      point(1, 0) = footPos(1, 0) + x*sin(theta);
+      point(2, 0) = footPos(2, 0) + z;
+
+      //Compile point into path
+      stepData.joinHorizontal(point);
+
+      t+= 1.0/(sampleCnt/2); //Increase t
+    }
+  }
+
+  //Creates a straight line from resting position to the start of our footstep
+    //This is essential as it prevents the leg from attempting to cover the entire distance in one motion
+  void restToStart(){
+    Matrix point(3, 1);
+
+    //Calculate vector size
+    float x = stepData(0, 0) - footPos(0, 0);
+    float y = stepData(1, 0) - footPos(1, 0);
+    float z = stepData(2, 0) - footPos(2, 0);
+    
+    int sampleCnt = stepSize/2;
+    for(int i = 0; i <= sampleCnt; i++){
+      if(i == 0){
+        //Add starting point to the path data
+        startData(0, 0) = footPos(0, 0) + x/sampleCnt;
+        startData(1, 0) = footPos(1, 0) + y/sampleCnt;
+        startData(2, 0) = footPos(2, 0) + z/sampleCnt;
+      }else{
+        //Calculate coords
+        point(0, 0) = footPos(0, 0) + (i+1)*x/sampleCnt;
+        point(1, 0) = footPos(1, 0) + (i+1)*y/sampleCnt;
+        point(2, 0) = footPos(2, 0) + (i+1)*z/sampleCnt;
+
+        //Append coords to path data
+        startData.joinHorizontal(point);
+      }
+    }
+  }
+
+  public:
+  //Constructor: takes the starting foot position, step size, and angular direction.
+  PlotPath(Matrix &position, float step, float angularDir){
+    this->footPos = position;
+    if(step >= 0){ //Ensures our step value is positive
+      this->stepSize = step;
+      this->theta = angularDir;
+    }else{
+      this->stepSize = -step;
+      this->theta = angularDir + PI;
+    }
+    stepData.reSize(3, 1);
+    startData.reSize(3, 1);
+
+    //Calculate the necessary paths using above metrics
+    generateStep();
+    restToStart();
+  }
+
+  //Accessor for step trajectory coordinates
+  Matrix getStepData(){
+    return stepData;
+  }
+
+  //Accessor for starting trajectory coordinates
+  Matrix getStartData(){
+    return startData;
+  }
+};
+
+#endif
+
+
